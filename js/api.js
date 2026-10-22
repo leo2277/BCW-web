@@ -106,6 +106,7 @@ export const Proxy = {
     } catch { /* ignorato */ }
   },
   officialBase() { return `${this.base}/v1`; },
+  officialW1Base() { return `${this.base}/w1`; },
 
   /** Esito dell'ultima verifica: 'ok', 'missing' (nessun proxy a quell'indirizzo) o 'unreachable'. */
   status: null,
@@ -288,8 +289,9 @@ export class DiskCache {
 // MARK: - Client
 
 export class ClassevivaClient {
-  constructor(transport, cacheNamespace, credentials) {
+  constructor(transport, cacheNamespace, credentials, { w1Transport = null } = {}) {
     this.transport = transport;
+    this.w1Transport = w1Transport;
     this.cache = new DiskCache(cacheNamespace);
     this.credentials = credentials ? { ...credentials } : null;
     this.token = null;
@@ -353,15 +355,15 @@ export class ClassevivaClient {
   // MARK: Richieste
 
   /** Richiesta autenticata su un percorso relativo allo studente. Rinnova il token se scaduto. */
-  async raw(method, studentPath, body = null) {
+  async raw(method, studentPath, body = null, { transport = this.transport } = {}) {
     await this.ensureToken();
     if (!this.studentId) throw APIError.notAuthenticated();
     const path = `/students/${this.studentId}/${studentPath}`;
-    let result = await this.transport.send(method, path, body, this.token);
+    let result = await transport.send(method, path, body, this.token);
     if (result.status === 401 || result.status === 403) {
       this.token = null;
       await this.login();
-      result = await this.transport.send(method, path, body, this.token);
+      result = await transport.send(method, path, body, this.token);
     }
     if (result.status < 200 || result.status >= 300) {
       if (result.status === 401) throw APIError.notAuthenticated();
@@ -378,22 +380,30 @@ export class ClassevivaClient {
    * Scarica e decodifica una risposta JSON. In caso di errore di rete
    * restituisce l'ultima copia salvata (modalità offline).
    */
-  async fetch(parse, studentPath, { method = 'GET', body = null, useCache = true } = {}) {
+  async fetch(parse, studentPath, {
+    method = 'GET', body = null, useCache = true, transport = this.transport, cachePath = studentPath,
+  } = {}) {
     try {
-      const result = await this.raw(method, studentPath, body);
+      const result = await this.raw(method, studentPath, body, { transport });
       const text = resultText(result);
       let json;
       try { json = JSON.parse(text); } catch { throw APIError.decoding(); }
       const value = parse(json);
-      if (useCache) this.cache.store(text, studentPath);
+      if (useCache) this.cache.store(text, cachePath);
       return { value, fromCache: false };
     } catch (error) {
       if (useCache && isOfflineError(error)) {
-        const cached = await this.cached(parse, studentPath);
+        const cached = await this.cached(parse, cachePath);
         if (cached) return { value: cached, fromCache: true };
       }
       throw error;
     }
+  }
+
+  /** Endpoint aggiuntivi di Classeviva sotto `/rest/w1`. */
+  fetchW1(parse, studentPath, options = {}) {
+    if (!this.w1Transport) throw APIError.unavailable('API compiti non disponibile.');
+    return this.fetch(parse, studentPath, { ...options, transport: this.w1Transport, cachePath: `w1/${studentPath}` });
   }
 
   /**
@@ -424,6 +434,11 @@ export class ClassevivaClient {
     const text = await this.cache.load(studentPath);
     if (!text) return null;
     try { return parse(JSON.parse(text)); } catch { return null; }
+  }
+
+  cachedW1(parse, studentPath) {
+    if (!this.w1Transport) return null;
+    return this.cached(parse, `w1/${studentPath}`);
   }
 
   /** Scarica un file, pronto per l'anteprima. */

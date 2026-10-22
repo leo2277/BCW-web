@@ -13,7 +13,7 @@ import { CloudError, CloudStorage, CloudSync, accountFromServer, cloudRequest, i
 import {
   parseAbsencesResponse, parseAgendaResponse, parseCalendarResponse, parseCardResponse, parseDidacticsResponse,
   parseDocumentCheck, parseDocumentsResponse, parseGradesResponse, parseLessonsResponse, parseNoteReadResponse,
-  parseNoticeDetail, parseNoticeboardResponse, parseNotesResponse, parsePeriodsResponse, parseSchoolbooksResponse,
+  parseHomeworksResponse, parseNoticeDetail, parseNoticeboardResponse, parseNotesResponse, parsePeriodsResponse, parseSchoolbooksResponse,
   parseSubjectsResponse,
 } from './models.js';
 import { addDays, apiString, dayKey, nameCased, schoolYear, startOfDay, uuid, StableID } from './util.js';
@@ -24,6 +24,74 @@ const DEMO_KEY = 'bcw.demoMode';
 const gradePaths = ['grades', 'grades2324', 'grades2'];
 
 const OFFLINE_MESSAGE = 'Sei offline: stai vedendo gli ultimi dati salvati.';
+
+const homeworkTextKey = (value) => (value ?? '').toLocaleLowerCase('it-IT').replace(/\s+/g, ' ').trim();
+
+function homeworkDedupKey(event) {
+  const day = event.day ?? event.begin;
+  if (!(day instanceof Date) || Number.isNaN(day.getTime())) return null;
+  const text = homeworkTextKey(event.notes);
+  if (!text) return null;
+  const subject = event.subjectId != null
+    ? `id:${event.subjectId}`
+    : `name:${homeworkTextKey(event.subjectName)}`;
+  return `${subject}|${dayKey(day)}|${text}`;
+}
+
+function pushIndex(map, key, index) {
+  if (key == null) return;
+  const list = map.get(key);
+  if (list) list.push(index);
+  else map.set(key, [index]);
+}
+
+function mergeAgendaEvents(agendaEvents, homeworkEvents) {
+  const merged = agendaEvents.map((event) => ({ ...event, source: event.source ?? 'v1' }));
+  const primary = new Map();
+  const fallback = new Map();
+
+  for (let i = 0; i < merged.length; i++) {
+    const event = merged[i];
+    if (event.kind !== 'homework') continue;
+    pushIndex(primary, event.homeworkId != null ? `id:${event.homeworkId}` : null, i);
+    pushIndex(primary, event.id != null ? `id:${event.id}` : null, i);
+    pushIndex(fallback, homeworkDedupKey(event), i);
+  }
+
+  const resolveUnique = (indexes) => (indexes.length === 1 ? indexes[0] : -1);
+
+  for (const item of homeworkEvents) {
+    const homework = { ...item, source: item.source ?? 'w1' };
+    let index = -1;
+    const candidates = [];
+    if (homework.homeworkId != null) candidates.push(...(primary.get(`id:${homework.homeworkId}`) ?? []));
+    if (homework.id != null) candidates.push(...(primary.get(`id:${homework.id}`) ?? []));
+    const uniqueCandidates = [...new Set(candidates)];
+    if (uniqueCandidates.length) index = resolveUnique(uniqueCandidates);
+    if (index < 0) {
+      const key = homeworkDedupKey(homework);
+      if (key) index = resolveUnique(fallback.get(key) ?? []);
+    }
+
+    if (index >= 0 && merged[index]?.kind === 'homework') {
+      const legacy = merged[index];
+      merged[index] = {
+        ...legacy,
+        ...homework,
+        id: legacy.id,
+        source: 'v1+w1',
+      };
+      continue;
+    }
+
+    const nextIndex = merged.push(homework) - 1;
+    pushIndex(primary, homework.homeworkId != null ? `id:${homework.homeworkId}` : null, nextIndex);
+    pushIndex(primary, homework.id != null ? `id:${homework.id}` : null, nextIndex);
+    pushIndex(fallback, homeworkDedupKey(homework), nextIndex);
+  }
+
+  return merged.sort((a, b) => a.begin - b.begin);
+}
 
 function readJSON(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
@@ -259,7 +327,12 @@ export class AppModel {
     this.activeAccountID = account.id;
     this.saveActiveID(account.id);
     this.loginName = account.name;
-    this.client = new ClassevivaClient(new HttpTransport(Proxy.officialBase()), `live-${account.id}`, account.credentials);
+    this.client = new ClassevivaClient(
+      new HttpTransport(Proxy.officialBase()),
+      `live-${account.id}`,
+      account.credentials,
+      { w1Transport: new HttpTransport(Proxy.officialW1Base()) },
+    );
     this.timetable.load(account.id);
     if (this.cloud) this.sync.pullTimetable(account.id);
     this.phase = 'signedIn';
@@ -674,13 +747,16 @@ export class AppModel {
     return `agenda/all/${apiString(year.start)}/${apiString(year.end)}`;
   }
 
+  get homeworksPath() { return 'homeworks/index'; }
+
   /** Mostra subito gli ultimi dati salvati, prima che arrivi la risposta di rete. */
   async loadFromCache(client) {
-    const [card, periods, subjects, agenda, absences, notices, notes, calendar] = await Promise.all([
+    const [card, periods, subjects, agenda, homeworks, absences, notices, notes, calendar] = await Promise.all([
       client.cached(parseCardResponse, 'card'),
       client.cached(parsePeriodsResponse, 'periods'),
       client.cached(parseSubjectsResponse, 'subjects'),
       client.cached(parseAgendaResponse, this.agendaPath),
+      client.cachedW1(parseHomeworksResponse, this.homeworksPath),
       client.cached(parseAbsencesResponse, 'absences/details'),
       client.cached(parseNoticeboardResponse, 'noticeboard'),
       client.cached(parseNotesResponse, 'notes/all'),
@@ -698,7 +774,7 @@ export class AppModel {
       if (!this.grades.length && grades) this.grades = grades.grades.sort((a, b) => b.date - a.date);
       if (!this.periods.length && periods) this.periods = periods.periods;
       if (!this.subjects.length && subjects) this.subjects = subjects.subjects;
-      if (!this.agenda.length && agenda) this.agenda = agenda.events.sort((a, b) => a.begin - b.begin);
+      if (!this.agenda.length && agenda) this.agenda = mergeAgendaEvents(agenda.events, homeworks?.events ?? []);
       if (!this.absences.length && absences) this.absences = absences.events.sort((a, b) => b.date - a.date);
       if (!this.notices.length && notices) this.notices = this.sortedNotices(notices.items);
       if (!this.notes.length && notes) this.notes = notes.notes;
@@ -811,7 +887,30 @@ export class AppModel {
   }
 
   async loadAgenda() {
-    await this.run(parseAgendaResponse, this.agendaPath, (r) => { this.agenda = r.events.sort((a, b) => a.begin - b.begin); });
+    const client = this.client;
+    if (!client) return;
+    let agenda = null;
+    await this.run(parseAgendaResponse, this.agendaPath, (r) => { agenda = r.events; });
+    if (client !== this.client || !agenda) {
+      this.rescheduleReminders();
+      return;
+    }
+
+    let homeworks = [];
+    try {
+      const result = await client.fetchW1(parseHomeworksResponse, this.homeworksPath);
+      if (client !== this.client) return;
+      homeworks = result.value.events;
+      if (result.fromCache) {
+        this.isOffline = true;
+        this.lastError ??= OFFLINE_MESSAGE;
+      }
+    } catch {
+      // Nuova API opzionale: senza /w1 la vecchia agenda resta valida.
+    }
+
+    this.agenda = mergeAgendaEvents(agenda, homeworks);
+    this.changed();
     this.rescheduleReminders();
   }
 
