@@ -42,9 +42,12 @@ const TYPES = {
 const PUBLIC = ['index.html', 'manifest.webmanifest', 'config.json', 'sw.js', 'css', 'js', 'icons', 'fonts', 'logo'];
 
 function upstreamURL(path) {
+  // /api/w1/<percorso>            → https://web.spaggiari.eu/rest/w1/<percorso>
   // /api/v1/<percorso>            → https://web.spaggiari.eu/rest/v1/<percorso>
   // /api/archive/<aa>/<percorso>  → https://web<aa>.spaggiari.eu/rest/v1/<percorso>
-  let m = /^\/api\/v1(\/[^?#]*)$/.exec(path);
+  let m = /^\/api\/w1(\/[^?#]*)$/.exec(path);
+  if (m) return `https://web.spaggiari.eu/rest/w1${m[1]}`;
+  m = /^\/api\/v1(\/[^?#]*)$/.exec(path);
   if (m) return `https://web.spaggiari.eu/rest/v1${m[1]}`;
   m = /^\/api\/archive\/(\d{2})(\/[^?#]*)$/.exec(path);
   if (m) return `https://web${m[1]}.spaggiari.eu/rest/v1${m[2]}`;

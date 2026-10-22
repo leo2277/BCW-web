@@ -14,7 +14,9 @@ const CLASSEVIVA_HEADERS = {
 };
 
 function upstreamURL(pathname) {
-  let m = /^(?:\/api)?\/v1(\/[^?#]*)$/.exec(pathname);
+  let m = /^(?:\/api)?\/w1(\/[^?#]*)$/.exec(pathname);
+  if (m) return `https://web.spaggiari.eu/rest/w1${m[1]}`;
+  m = /^(?:\/api)?\/v1(\/[^?#]*)$/.exec(pathname);
   if (m) return `https://web.spaggiari.eu/rest/v1${m[1]}`;
   m = /^(?:\/api)?\/archive\/(\d{2})(\/[^?#]*)$/.exec(pathname);
   if (m) return `https://web${m[1]}.spaggiari.eu/rest/v1${m[2]}`;

@@ -235,6 +235,62 @@ export function parseAgendaEvent(c) {
 
 export const parseAgendaResponse = (c) => ({ events: arr(c, 'agenda', parseAgendaEvent) });
 
+function parseClassroomDate(dateValue, timeValue) {
+  const day = parseDate(dateValue);
+  if (!day) return null;
+  const time = nilIfEmpty(timeValue);
+  if (!time) return day;
+  const withTime = parseDate(`${dayKey(day)} ${time}`);
+  return withTime ?? day;
+}
+
+function parseHomeworkAttachment(item) {
+  return { ...item };
+}
+
+export function parseHomeworkEvent(c) {
+  const assignedAt = parseClassroomDate(c?.assignmentDate, c?.assignmentTime);
+  const expiresAt = parseClassroomDate(c?.expiryDate, c?.expiryTime);
+  const begin = expiresAt ?? assignedAt ?? distantPast;
+  const subjectName = nilIfEmpty(str(c, 'subjectDesc'));
+  const normalizedSubject = subjectName ? sentenceCased(subjectName) : null;
+  const e = {
+    id: int(c, 'evtId') ?? StableID.make(str(c, 'evtCode') ?? 'NEWDC', str(c, 'homeworkDesc') ?? '', dayKey(begin)),
+    code: str(c, 'evtCode') ?? 'NEWDC',
+    begin,
+    end: expiresAt ?? begin,
+    day: startOfDay(begin),
+    isFullDay: true,
+    notes: (str(c, 'homeworkDesc') ?? '').trim(),
+    title: normalizedSubject ?? 'Compiti',
+    subjectId: int(c, 'subjectId'),
+    subjectName: normalizedSubject,
+    authorName: nameCased(str(c, 'teacherName') ?? ''),
+    kind: 'homework',
+    timeDescription: 'Tutto il giorno',
+    source: 'w1',
+    homeworkId: int(c, 'evtId'),
+    homeworkDone: bool(c, 'homeworkDone'),
+    homeworkMarkedDone: bool(c, 'homeworkMarkedDone'),
+    assignmentDate: assignedAt,
+    assignmentTime: nilIfEmpty(str(c, 'assignmentTime')),
+    expiryDate: expiresAt,
+    expiryTime: nilIfEmpty(str(c, 'expiryTime')),
+    studentAttachmentsAllowed: bool(c, 'studentAttachmentsAllowed'),
+    teacherId: int(c, 'teacherId'),
+    teacherFiles: arr(c, 'teacherFiles', parseHomeworkAttachment),
+    teacherLinks: arr(c, 'teacherLinks', parseHomeworkAttachment),
+    studentFiles: arr(c, 'studentFiles', parseHomeworkAttachment),
+    correctedFiles: arr(c, 'correctedFiles', parseHomeworkAttachment),
+    lastStudentMsg: nilIfEmpty(str(c, 'lastStudentMsg')),
+    lastTeacherMsg: nilIfEmpty(str(c, 'lastTeacherMsg')),
+    newMessages: bool(c, 'newMessages'),
+  };
+  return e;
+}
+
+export const parseHomeworksResponse = (c) => ({ events: arr(c, 'items', parseHomeworkEvent) });
+
 export function parseLesson(c) {
   const l = {
     date: parseDate(str(c, 'evtDate')) ?? distantPast,
