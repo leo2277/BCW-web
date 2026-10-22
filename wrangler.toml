@@ -1,0 +1,5 @@
+# Configurazione del Worker di BCW-api (vedi README, "Pubblicazione su Cloudflare").
+name = "bcw-web"
+compatibility_date = "2026-10-19"
+[assets]
+directory = "."
