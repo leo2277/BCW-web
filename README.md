@@ -198,4 +198,4 @@ Le viste producono HTML a partire dallo stato; `dom.js` applica al documento sol
 
 ## Licenza
 
-Distribuito con licenza MIT. Vedi [LICENSE](LICENSE).
+Distribuito con licenza MIT. Vedi [LICENSE](LICENSE)..
